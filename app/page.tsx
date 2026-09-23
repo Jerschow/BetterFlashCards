@@ -1,69 +1,365 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { SAMPLE_ITEMS, maskText, groupHintChunks, type Exercise, type Grade } from "../lib/recall";
+import { emptyData, parseData, dailyLanguageCount, getLanguageGoal, dayKey, normalizeTerm, isExcluded, reviewItem, effectiveRating, type PendingAttempt, type AppData, type Deck, type Item, type Rating } from "../lib/model";
+import { apiFetch } from "../lib/cloud";
+import AccountPanel from "../components/AccountPanel";
+import Onboarding, { SkillLevelGrid } from "../components/Onboarding";
+import SentenceText, { sentenceParts, sentenceHighlights } from "../components/SentenceText";
+import VocabularyDialog, { type VocabularyCandidate } from "../components/VocabularyDialog";
+import { isChineseLanguage, isJapaneseLanguage, isSkillLevels, skillSummary, goalExample, type ChineseScript, type SkillLevels } from "../lib/languages";
+import { needsOnboarding, getOnboardingDraft, prepareOnboarding } from "../lib/onboarding";
+import WritingPractice, { writingCharactersOf } from "../components/WritingPractice";
+import CharacterText from "../components/CharacterText";
+import MnemonicDialog from "../components/MnemonicDialog";
+import "./recall.css";
+
+const STORAGE_KEY = "sentence-recall.v2";
+const LANGUAGES = ["English", "Spanish", "French", "German", "Japanese", "Mandarin Chinese", "Cantonese", "Russian", "Italian", "Portuguese", "Korean", "Arabic", "Hindi", "Swahili"];
+type Tab = "practice" | "vocabulary" | "add" | "writing" | "settings" | "help";
+type Generated = { sourceTerm?: string; targetTerm: string; sense: string; exercise: Exercise };
+type HintRecord = PendingAttempt;
+const noHints = (exerciseId = "", answer = ""): HintRecord => ({ exerciseId, answer, hintsUsed: 0, lengthsShown: false, shellShown: false, targetRevealed: false, contexts: [] });
+const freshDeck = (sourceLanguage = "English", targetLanguage = "Spanish", level = "A2", goal = "Use useful vocabulary in everyday conversation"): Deck => ({ id: crypto.randomUUID(), name: `${targetLanguage} practice`, sourceLanguage, targetLanguage, level, goal, personalized: false, excludedTerms: [], dailyGoal: 10, skills: undefined });
+function message(error: unknown) { return error instanceof Error ? error.message : "Something went wrong. Please try again."; }
+function dateLabel(time: number) { return new Date(time).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); }
+function cloneSamples(deckId: string): Item[] { return SAMPLE_ITEMS.map(item => ({ ...item, id: crypto.randomUUID(), deckId, exercises: item.exercises.map(e => ({ ...e, id: crypto.randomUUID() })) })); }
+function makeItem(word: Generated, sourceTerm: string, deck: Deck): Item { return { id: crypto.randomUUID(), deckId: deck.id, sourceTerm, targetTerm: word.targetTerm, sense: word.sense, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, level: deck.level, exercises: [word.exercise], exerciseIndex: 0, dueAt: Date.now(), intervalDays: 0, reviewCount: 0 }; }
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 100_000);
+  try { const response = await apiFetch(path, { method: "POST", body: JSON.stringify(body), signal: controller.signal }); const result = await response.json().catch(() => null); if (!response.ok || !result) throw new Error(result?.error || "The request could not finish. Please try again."); return result as T; }
+  catch (error) { if (error instanceof Error && error.name === "AbortError") throw new Error("That request took too long. Your saved work is unchanged; please retry."); throw error; }
+  finally { clearTimeout(timer); }
+}
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+  const [store, setStore] = useState<{ storageKey: string; data: AppData }>({ storageKey: STORAGE_KEY, data: emptyData() });
+  const data = store.data;
+  const setData: Dispatch<SetStateAction<AppData>> = useCallback(update => setStore(previous => ({ ...previous, data: typeof update === "function" ? update(previous.data) : update })), []);
+  const [hydrated, setHydrated] = useState(false);
+  const [canPersist, setCanPersist] = useState(false);
+  const [storageProblem, setStorageProblem] = useState("");
+  const [tab, setTab] = useState<Tab>("practice");
+  const [deckId, setDeckId] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [extraId, setExtraId] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [lengths, setLengths] = useState(false);
+  const [revealed, setRevealed] = useState<number[]>([]);
+  const [shell, setShell] = useState(false);
+  const [answerRevealed, setAnswerRevealed] = useState(false);
+  const [grade, setGrade] = useState<Grade | null>(null);
+  const [variantStatus, setVariantStatus] = useState<{id:string;state:"loading"|"done"|"error";error?:string}>({id:"",state:"done"});
+  const [highlightStatus, setHighlightStatus] = useState("");
+  const [preGradeHints, setPreGradeHints] = useState<HintRecord | null>(null);
+  const [completedId, setCompletedId] = useState("");
+  const [now, setNow] = useState(Date.now());
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [wordForm, setWordForm] = useState({ sourceTerm: "", targetTerm: "", sense: "" });
+  const [preview, setPreview] = useState<(Generated & { sourceTerm: string; deckId: string }) | null>(null);
+  const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [editingDeck, setEditingDeck] = useState<Deck | null>(null);
+  const [newDeck, setNewDeck] = useState(false);
+  const [editingSkills, setEditingSkills] = useState<Partial<SkillLevels>>({});
+  useEffect(() => {setEditingSkills(editingDeck?.skills || {});},[editingDeck?.id]);
+  const [mnemonicCharacter, setMnemonicCharacter] = useState<string | null>(null);
+  const [editingPreferences, setEditingPreferences] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
+  const [authUser, setAuthUser] = useState<{id:string;email?:string}|null>(null);
+  const [accountRequest, setAccountRequest] = useState<{mode:"login"|"register";requestId:number}>({mode:"login",requestId:0});
+  const [welcomeStarted, setWelcomeStarted] = useState(false);
+  const [vocabularyCandidate, setVocabularyCandidate] = useState<VocabularyCandidate|null>(null);
+  const setup = getOnboardingDraft(data);
+  const onboardingVisible = needsOnboarding(data) || editingPreferences || !!data.onboardingDraft;
+  const welcomeVisible = hydrated && needsOnboarding(data) && !data.onboardingDraft && !welcomeStarted;
+  const inFlight = useRef(false);
+  const identityEpoch = useRef(0);
+  const rated = useRef(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const answerInput = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    document.title = "Heron";
+    let loaded = emptyData();
+    try {
+      const current = localStorage.getItem(STORAGE_KEY);
+      const previous = current === null ? localStorage.getItem("sentence-recall.v1") : null;
+      if (current !== null || previous !== null) {
+        const parsed = parseData(JSON.parse(current ?? previous!));
+        if (!parsed) throw new Error("Unrecognized saved data");
+        loaded = parsed;
+      }
+      setCanPersist(true);
+    } catch { setStorageProblem("Your existing saved data could not be read. It has not been replaced. Import a backup, or explicitly save this new session to replace the unreadable copy."); }
+    setStore({ storageKey: STORAGE_KEY, data: loaded }); setDeckId(loaded.decks[0]?.id || ""); setHydrated(true);
+  }, []);
+  useEffect(() => {
+    if (!hydrated || !canPersist) return;
+    try { localStorage.setItem(store.storageKey, JSON.stringify(data)); }
+    catch { setCanPersist(false); setStorageProblem("This browser could not save your changes. Export a backup before closing the page, then try enabling saving again."); }
+  }, [store, data, hydrated, canPersist]);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(timer); }, []);
+
+  const deck = data.decks.find(d => d.id === deckId) || data.decks[0];
+  const deckItems = data.items.filter(item => item.deckId === deck?.id);
+  const available = deckItems.filter(item => !item.excluded && deck && !isExcluded(deck, item.targetTerm));
+  const dueItems = available.filter(item => item.dueAt <= now).sort((a, b) => a.dueAt - b.dueAt);
+  const selected = available.find(item => item.id === selectedId);
+  const current = selected && (selected.dueAt <= now || extraId === selected.id || completedId === selected.id) ? selected : dueItems[0];
+  const exercise = current?.exercises[current.exerciseIndex] || current?.exercises[0];
+  const displayChunks = exercise ? groupHintChunks(exercise.chunks, current?.targetLanguage || "") : [];
+  const hints = grade && preGradeHints ? preGradeHints : current ? data.pendingAttempts?.[current.id] || noHints(exercise?.id || "", answer) : noHints();
+  const assisted = hints.hintsUsed > 0 || hints.lengthsShown || hints.shellShown || hints.targetRevealed;
+  const completed = !!current && completedId === current.id;
+  const locked = answerRevealed || grade !== null || completed;
+  const today = dayKey(now);
+  const goalLanguage = deck?.targetLanguage || data.profile.languages[0] || "";
+  const goalLanguageKey = normalizeTerm(goalLanguage);
+  const dailyGoal = getLanguageGoal(data, goalLanguage);
+  const dailyDone = dailyLanguageCount(data, goalLanguage, now);
+  const goalHit = !onboardingVisible && !!deck && data.profile.onboarded && dailyDone >= dailyGoal;
+  const goalPaused = goalHit && data.languageGoalContinuedDays?.[goalLanguageKey] !== today;
+  const showGoalModal = goalPaused && data.languageGoalPausedDays?.[goalLanguageKey] !== today && !showAccount && !vocabularyCandidate;
+
+  const needsVariants = !!deck && !!exercise && isChineseLanguage(deck.targetLanguage) && preferencesFor(deck).chineseScript === "both" && (!exercise.simplifiedTranslation || !exercise.traditionalTranslation);
+  useEffect(() => {
+    if (!locked || !needsVariants || !current || !exercise || variantStatus.id===exercise.id) return;
+    const itemId=current.id, exerciseId=exercise.id, epoch=identityEpoch.current;
+    setVariantStatus({id:exerciseId,state:"loading"});
+    post<{simplifiedTranslation:string;traditionalTranslation:string}>("/api/practice",{action:"variants",sourceSentence:exercise.sourceSentence,referenceTranslation:exercise.referenceTranslation,sourceLanguage:current.sourceLanguage,targetLanguage:current.targetLanguage})
+      .then(versions => {
+        if (identityEpoch.current!==epoch) return;
+        setData(previous => ({...previous,items:previous.items.map(item => item.id===itemId ? {...item,exercises:item.exercises.map(example => example.id===exerciseId ? {...example,...versions}:example)}:item)}));
+        setVariantStatus({id:exerciseId,state:"done"});
+      }).catch(cause => {if (identityEpoch.current===epoch) setVariantStatus({id:exerciseId,state:"error",error:message(cause)});});
+  },[locked,needsVariants,current?.id,exercise?.id,variantStatus.id]);
+  useEffect(() => {
+    if (!current || !exercise || onboardingVisible || tab!=="practice" || exercise.sourceTargetText || highlightStatus===exercise.id || sentenceHighlights(exercise.sourceSentence,sourceHighlight(exercise,current.sourceTerm)).length) return;
+    const itemId=current.id, exerciseId=exercise.id, epoch=identityEpoch.current;
+    setHighlightStatus(exerciseId);
+    post<{sourceTargetText:string}>("/api/practice",{action:"highlight",sourceSentence:exercise.sourceSentence,sourceTerm:current.sourceTerm,targetTerm:current.targetTerm,sourceLanguage:current.sourceLanguage,targetLanguage:current.targetLanguage})
+      .then(result => {
+        if (identityEpoch.current!==epoch) return;
+        setData(previous => ({...previous,items:previous.items.map(item => item.id===itemId ? {...item,exercises:item.exercises.map(example => example.id===exerciseId ? {...example,sourceTargetText:result.sourceTargetText}:example)}:item)}));
+      }).catch(() => {/* The exercise remains usable if optional highlighting is unavailable. */});
+  },[current?.id,exercise?.id,onboardingVisible,tab,highlightStatus]);
+  useEffect(() => {
+    if (!showAccount) return;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const modal = document.querySelector<HTMLElement>(".account-modal");
+    modal?.querySelector<HTMLElement>("button")?.focus();
+    const handleKey = (event:KeyboardEvent) => {
+      if (event.key==="Escape") {event.preventDefault();setShowAccount(false);}
+      if (event.key!=="Tab") return;
+      const elements=Array.from(modal?.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),a[href]') || []).filter(element => element.getClientRects().length);
+      const first=elements[0],last=elements[elements.length-1];
+      if (event.shiftKey && (document.activeElement===first || !modal?.contains(document.activeElement))) {event.preventDefault();last?.focus();}
+      else if (!event.shiftKey && (document.activeElement===last || !modal?.contains(document.activeElement))) {event.preventDefault();first?.focus();}
+    };
+    document.addEventListener("keydown",handleKey);
+    return () => {document.removeEventListener("keydown",handleKey);previous?.focus();};
+  },[showAccount]);
+
+  function resetVisible() { setAnswer(""); setLengths(false); setRevealed([]); setShell(false); setAnswerRevealed(false); setGrade(null); setPreGradeHints(null); setCompletedId(""); setError(""); rated.current = false; }
+  useEffect(() => { resetVisible(); const draft = current ? data.pendingAttempts?.[current.id] : undefined; if (draft && draft.exerciseId === exercise?.id) { setAnswer(draft.answer); setLengths(draft.lengthsShown); setShell(draft.shellShown); setAnswerRevealed(draft.targetRevealed); } }, [current?.id, exercise?.id]);
+  function updateHints(update: Partial<HintRecord>) { if (!current || !exercise) return; setData(previous => ({ ...previous, pendingAttempts: { ...previous.pendingAttempts, [current.id]: { ...(previous.pendingAttempts?.[current.id] || noHints(exercise.id, answer)), exerciseId: exercise.id, answer, ...update } } })); }
+
+  function navigate(next: Tab) { if (busy) return; setTab(next); setError(""); setNotice(""); }
+  function switchDeck(id: string) { setDeckId(id); setSelectedId(""); setExtraId(""); setPreview(null); resetVisible(); setNotice(""); }
+  function replaceData(next: AppData) { identityEpoch.current++; setEditingPreferences(false); setShowAccount(false); setPreview(null); setEditingDeck(null); setMnemonicCharacter(null); setVocabularyCandidate(null); setData(next); setDeckId(next.decks[0]?.id || ""); setSelectedId(""); setExtraId(""); resetVisible(); }
+  function changeIdentity(identity: { storageKey: string; userId: string | null; data: AppData }) { identityEpoch.current++; setEditingPreferences(false); setShowAccount(false); setPreview(null); setEditingDeck(null); setMnemonicCharacter(null); setVocabularyCandidate(null); setCanPersist(true); setStorageProblem(""); setStore({ storageKey: identity.storageKey, data: identity.data }); setDeckId(identity.data.decks[0]?.id || ""); setSelectedId(""); setExtraId(""); resetVisible(); }
+  function keepPracticing() { setData(previous => ({ ...previous, languageGoalContinuedDays: {...previous.languageGoalContinuedDays,[goalLanguageKey]:today}, languageGoalPausedDays: {...previous.languageGoalPausedDays,[goalLanguageKey]:today} })); }
+  function openAccount(mode:"login"|"register" = "login") { setAccountRequest({mode,requestId:Date.now()}); setShowAccount(true); }
+  function beginPreferences() { setWelcomeStarted(true); setData(previous => ({...previous,onboardingDraft:getOnboardingDraft(previous)})); }
+  function openSentenceWord(text:string,side:"source"|"target",sentence:string,language:string) { setVocabularyCandidate({text,side,sentence,language}); }
+  function sourceHighlight(example:Exercise, term:string) { return example.sourceTargetText || SAMPLE_ITEMS.flatMap(item => item.exercises).find(item => item.sourceSentence===example.sourceSentence)?.sourceTargetText || term.replace(/^to\s+/i, ""); }
+  function translationLines(example:Exercise, language:string) {
+    const script = deck ? preferencesFor(deck).chineseScript : undefined;
+    const variants = isChineseLanguage(language) && script === "both" && example.simplifiedTranslation && example.traditionalTranslation
+      ? [["SIMPLIFIED",example.simplifiedTranslation],["TRADITIONAL",example.traditionalTranslation]]
+      : [["ONE POSSIBLE TRANSLATION",isChineseLanguage(language) && script === "traditional" ? example.traditionalTranslation || example.referenceTranslation : isChineseLanguage(language) && script === "simplified" ? example.simplifiedTranslation || example.referenceTranslation : example.referenceTranslation]];
+    return variants.map(([label,text]) => <div className="translation-variant" key={label}><p className="tiny-label">{label}</p><p className="reference-sentence" dir="auto"><SentenceText text={text} language={language} onWord={word => openSentenceWord(word,"target",text,language)}/></p></div>);
+  }
+  async function captureVocabulary(targetDeckId:string, withWriting:boolean):Promise<string> {
+    const candidate = vocabularyCandidate;
+    const targetDeck = data.decks.find(row => row.id === targetDeckId);
+    if (!candidate || !targetDeck || inFlight.current) throw new Error("Please finish the current action first.");
+    if (data.items.length >= 2000) throw new Error("This collection holds up to 2,000 words.");
+    const epoch = identityEpoch.current;
+    inFlight.current = true; setBusy("capture");
+    try {
+      let item = data.items.find(row => row.deckId === targetDeck.id && normalizeTerm(candidate.side === "target" ? row.targetTerm : row.sourceTerm.replace(/^to\s+/i,"")) === normalizeTerm(candidate.text));
+      const exists = !!item;
+      if (!item) {
+        const generated = await post<Generated>("/api/capture", {...candidate,sourceLanguage:targetDeck.sourceLanguage,targetLanguage:targetDeck.targetLanguage,level:targetDeck.level,...preferencesFor(targetDeck)});
+        if (!generated.sourceTerm) throw new Error("The word could not be prepared. Please try again.");
+        item = data.items.find(row => row.deckId === targetDeck.id && normalizeTerm(row.targetTerm) === normalizeTerm(generated.targetTerm)) || makeItem(generated,generated.sourceTerm,targetDeck);
+      }
+      if (epoch !== identityEpoch.current) throw new Error("Your account changed. Please select the word again.");
+      const saved = item;
+      const characters = withWriting && (isChineseLanguage(targetDeck.targetLanguage) || isJapaneseLanguage(targetDeck.targetLanguage)) ? writingCharactersOf(saved.targetTerm) : [];
+      setData(previous => {
+        const cards = characters.filter(character => !previous.writingCards.some(card => card.itemId === saved.id && card.character === character)).map(character => ({id:crypto.randomUUID(),itemId:saved.id,character,dueAt:0,reviewCount:0}));
+        const existing = previous.items.some(row => row.id === saved.id);
+        return {...previous,items:existing ? previous.items.map(row => row.id === saved.id ? {...row,excluded:false}:row) : [...previous.items,saved],
+          decks:previous.decks.map(row => row.id === targetDeck.id ? {...row,excludedTerms:row.excludedTerms.filter(term => normalizeTerm(term)!==normalizeTerm(saved.targetTerm))}:row),
+          writingCards:[...previous.writingCards,...cards].slice(0,10000)};
+      });
+      if (tab === "practice" && current && exercise && !locked && candidate.side === "source" && candidate.sentence === exercise.sourceSentence) {
+        const isTarget = sentenceParts(sourceHighlight(exercise,current.sourceTerm),current.sourceLanguage).some(part => part.isWord && normalizeTerm(part.text)===normalizeTerm(candidate.text));
+        updateHints(isTarget ? {targetRevealed:true} : {hintsUsed:hints.hintsUsed+1});
+        if (isTarget) setAnswerRevealed(true);
+      }
+      return `${exists ? "Already in" : "Saved to"} ${targetDeck.name}.${characters.length ? " Added to writing practice too." : ""}`;
+    } finally { inFlight.current = false; setBusy(""); }
+  }
+  function changeDailyGoal(language:string,value:number) {
+    if (!Number.isInteger(value) || value < 1 || value > 100) return;
+    setData(previous => ({...previous,decks:previous.decks.map(row => normalizeTerm(row.targetLanguage)===normalizeTerm(language) ? {...row,dailyGoal:value}:row),profile:{...previous.profile,learningPreferences:[...(previous.profile.learningPreferences||[]).filter(row => normalizeTerm(row.language)!==normalizeTerm(language)),{...(previous.profile.learningPreferences||[]).find(row => normalizeTerm(row.language)===normalizeTerm(language)),language,dailyGoal:value}]}}));
+  }
+
+  function preferencesFor(target:Deck) {
+    const preference = data.profile.learningPreferences?.find(row => normalizeTerm(row.language)===normalizeTerm(target.targetLanguage));
+    return {skills:target.skills || preference?.skills,chineseScript:target.chineseScript || preference?.chineseScript};
+  }
+  async function personalizedWords(target: Deck, existing: Item[] = data.items) {
+    const result = await post<{ words: Generated[] }>("/api/personalize", { sourceLanguage: target.sourceLanguage, targetLanguage: target.targetLanguage, level: target.level, ...preferencesFor(target), goal: target.goal, count: 5, excludedTerms: target.excludedTerms, existingTerms: existing.filter(item => item.deckId === target.id).map(item => item.targetTerm).slice(-500) });
+    const seen = new Set(existing.filter(item => item.deckId === target.id).map(item => normalizeTerm(item.targetTerm)));
+    return result.words.filter(word => { const normalized = normalizeTerm(word.targetTerm); if (isExcluded(target, word.targetTerm) || seen.has(normalized) || !word.sourceTerm) return false; seen.add(normalized); return true; }).map(word => makeItem(word, word.sourceTerm!, target));
+  }
+  function openPreferences() {
+    if (busy) return;
+    setData(previous => ({ ...previous, onboardingDraft: getOnboardingDraft(previous) }));
+    setEditingPreferences(true); setError(""); setNotice("");
+  }
+  function cancelPreferences() {
+    if (busy || needsOnboarding(data)) return;
+    setData(previous => ({ ...previous, onboardingDraft: undefined }));
+    setEditingPreferences(false); setTab("settings"); setError("");
+  }
+  async function finishOnboarding(mode: "personalized" | "own" | "demo") {
+    const epoch = identityEpoch.current;
+    if (inFlight.current) return;
+    setError(""); inFlight.current = true; setBusy("onboarding");
+    try {
+      const { next, primary } = prepareOnboarding(data, setup, mode === "personalized");
+      let items: Item[] = [];
+      if (mode === "personalized") {
+        if (data.items.length > 1995) throw new Error("This collection holds up to 2,000 words. Choose your own words to save preferences without adding more.");
+        items = await personalizedWords(primary, data.items);
+        if (!items.length) throw new Error("No new suitable words were returned. Try again, adjust your goal, or choose your own words.");
+      } else if (mode === "demo") {
+        if (normalizeTerm(primary.sourceLanguage) !== "english" || normalizeTerm(primary.targetLanguage) !== "spanish") throw new Error("The prepared examples are for English-to-Spanish practice.");
+        const existing = new Set(data.items.filter(item => item.deckId === primary.id).map(item => normalizeTerm(item.targetTerm)));
+        items = cloneSamples(primary.id).filter(item => !existing.has(normalizeTerm(item.targetTerm)) && !isExcluded(primary, item.targetTerm));
+      }
+      if (next.items.length + items.length > 2000) throw new Error("This collection holds up to 2,000 words. Choose your own words to save preferences without adding more.");
+      if (epoch !== identityEpoch.current) return;
+      setData({ ...next, items: [...next.items, ...items] });
+      setEditingPreferences(false); setShowAccount(false); setNow(Date.now()); setDeckId(primary.id);
+      setSelectedId(items[0]?.id || ""); setExtraId(""); resetVisible();
+      const hasWords = next.items.some(item => item.deckId === primary.id && !item.excluded && !isExcluded(primary, item.targetTerm));
+      setTab(mode === "own" && !hasWords ? "add" : "practice");
+      setNotice(mode === "demo" ? "Your preferences are saved. These are prepared sample exercises." : mode === "personalized" ? "Your words are ready. Let’s put them into a sentence." : "Your preferences are saved. Your practice is ready.");
+    } catch (cause) { if (epoch === identityEpoch.current) setError(message(cause)); }
+    finally { inFlight.current = false; setBusy(""); }
+  }
+  async function addPersonalized() {
+    const epoch = identityEpoch.current;
+    if (!deck || inFlight.current) return;
+    if (data.items.length >= 1995) { setError("This prototype holds up to 2,000 words. Export your backup before starting a separate collection."); return; }
+    inFlight.current = true; setBusy("personalize"); setError("");
+    try { const words = await personalizedWords(deck); if (epoch !== identityEpoch.current) return; if (!words.length) throw new Error("No new suitable words were returned. Try adjusting this deck’s goal or level."); setData(previous => ({ ...previous, items: [...previous.items, ...words] })); setSelectedId(words[0].id); setExtraId(""); resetVisible(); setNow(Date.now()); setTab("practice"); setNotice(`${words.length} new words selected for your goal.`); }
+    catch (cause) { if (epoch === identityEpoch.current) setError(message(cause)); }
+    finally { inFlight.current = false; setBusy(""); }
+  }
+  async function generateWord(event: FormEvent<HTMLFormElement>) {
+    const epoch = identityEpoch.current;
+    event.preventDefault(); if (!deck || inFlight.current) return;
+    if (data.items.length >= 2000) { setError("This prototype holds up to 2,000 words."); return; }
+    inFlight.current = true; setBusy("generate"); setError(""); setPreview(null);
+    try { const result = await post<Generated>("/api/practice", { action: "generate", ...wordForm, sourceLanguage: deck.sourceLanguage, targetLanguage: deck.targetLanguage, level: deck.level, ...preferencesFor(deck) }); if (epoch !== identityEpoch.current) return; setPreview({ ...result, sourceTerm: wordForm.sourceTerm.trim(), deckId: deck.id }); }
+    catch (cause) { if (epoch === identityEpoch.current) setError(message(cause)); }
+    finally { inFlight.current = false; setBusy(""); }
+  }
+  function saveWord() {
+    if (!preview || busy || !deck) return;
+    if (data.items.some(item => item.deckId === deck.id && normalizeTerm(item.targetTerm) === normalizeTerm(preview.targetTerm))) { setError("That target is already in this deck. Find it under Vocabulary, including archived words."); return; }
+    const item = makeItem(preview, preview.sourceTerm, deck);
+    setData(previous => ({ ...previous, items: [...previous.items, item], decks: previous.decks.map(d => d.id === deck.id ? { ...d, excludedTerms: d.excludedTerms.filter(term => normalizeTerm(term) !== normalizeTerm(item.targetTerm)) } : d) })); setSelectedId(item.id); setPreview(null); setWordForm({ sourceTerm: "", targetTerm: "", sense: "" }); resetVisible(); setTab("practice"); setNow(Date.now()); setNotice("Vocabulary saved. Try the whole sentence first.");
+  }
+  async function checkAnswer() {
+    const epoch = identityEpoch.current;
+    if (!current || !exercise || !answer.trim() || inFlight.current || locked || goalPaused) return;
+    inFlight.current = true; setBusy("grade"); setError("");
+    try { const result = await post<{ grade: Grade }>("/api/practice", { action: "grade", sourceSentence: exercise.sourceSentence, sourceLanguage: current.sourceLanguage, targetLanguage: current.targetLanguage, answer }); if (epoch !== identityEpoch.current) return; setPreGradeHints(hints); updateHints({targetRevealed:true}); setGrade(result.grade); }
+    catch (cause) { if (epoch === identityEpoch.current) setError(message(cause)); }
+    finally { inFlight.current = false; setBusy(""); }
+  }
+  async function anotherContext() {
+    const epoch = identityEpoch.current;
+    if (!current || !exercise || inFlight.current || goalPaused || (grade !== null && !completed)) return;
+    const contexts = [...hints.contexts, { exerciseId: exercise.id, answer, hintsUsed:hints.hintsUsed, lengthsShown:hints.lengthsShown, shellShown:hints.shellShown, targetRevealed:hints.targetRevealed, createdAt: Date.now() }].slice(-100);
+    updateHints({ contexts }); setError(""); setNotice("");
+    if (completed) { setExtraId(current.id); updateHints({ ...noHints(exercise.id), contexts:[] }); }
+    if (exercise.origin === "sample" && current.exercises.length > 1) { setData(previous => ({ ...previous, items: previous.items.map(item => item.id === current.id ? { ...item, exerciseIndex: (item.exerciseIndex + 1) % item.exercises.length } : item) })); return; }
+    inFlight.current = true; setBusy("context");
+    try { const result = await post<Generated>("/api/practice", { action: "generate", sourceTerm: current.sourceTerm, targetTerm: current.targetTerm, sense: current.sense, sourceLanguage: current.sourceLanguage, targetLanguage: current.targetLanguage, level: deck?.level || current.level, ...(deck ? preferencesFor(deck):{}), avoidSentences: current.exercises.slice(-8).map(e => e.sourceSentence) }); if (epoch !== identityEpoch.current) return; setData(previous => ({ ...previous, items: previous.items.map(item => { if (item.id !== current.id) return item; const exercises = [...item.exercises, result.exercise].slice(-200); return { ...item, exercises, exerciseIndex: exercises.length - 1 }; }) })); }
+    catch (cause) { if (epoch === identityEpoch.current) setError(message(cause)); }
+    finally { inFlight.current = false; setBusy(""); }
+  }
+  function rate(rating: Rating) {
+    if (!current || !exercise || !deck || busy || completed || rated.current || goalPaused) return;
+    if (rating === "remembered" && (assisted || !answer.trim())) return;
+    if (rating === "hard" && (hints.targetRevealed || !answer.trim())) return;
+    rated.current = true; const at = Date.now();
+    let updated: Item; try { updated = reviewItem(current, rating, hints, at); } catch (cause) { rated.current = false; setError(message(cause)); return; }
+    setData(previous => ({ ...previous, items: previous.items.map(item => item.id === current.id ? updated : item), reviews: [...previous.reviews, { id: crypto.randomUUID(), itemId: current.id, exerciseId: exercise.id, deckId: deck.id, mode: "recall" as const, answer, rating: effectiveRating(rating,hints), contexts: hints.contexts, hintsUsed: hints.hintsUsed, lengthsShown: hints.lengthsShown, shellShown: hints.shellShown, targetRevealed: hints.targetRevealed, createdAt: at }].slice(-50000) }));
+    setData(previous => { const pendingAttempts = { ...previous.pendingAttempts }; delete pendingAttempts[current.id]; return { ...previous, pendingAttempts }; });
+    setSelectedId(current.id); setCompletedId(current.id); setNow(at); setNotice(`Review saved. Next due ${dateLabel(updated.dueAt)}.`);
+  }
+  function nextWord() { const next = dueItems.find(item => item.id !== current?.id); setSelectedId(next?.id || ""); setExtraId(""); resetVisible(); setNotice(""); setNow(Date.now()); requestAnimationFrame(() => answerInput.current?.focus()); }
+  function archive(item: Item, excluded: boolean) { setData(previous => ({ ...previous, items: previous.items.map(i => i.id === item.id ? { ...i, excluded } : i), decks: previous.decks.map(d => d.id === item.deckId ? { ...d, excludedTerms: excluded ? [...new Set([...d.excludedTerms, item.targetTerm])] : d.excludedTerms.filter(term => normalizeTerm(term) !== normalizeTerm(item.targetTerm)) } : d) })); setNotice(excluded ? "Word archived. It is excluded from practice and future personalized suggestions." : "Word restored to practice."); }
+  function saveDeck(event: FormEvent<HTMLFormElement>) { event.preventDefault(); if (!editingDeck) return; if (!isSkillLevels(editingSkills)) { setError("Choose one level for each of the four skills."); return; } if (newDeck && data.decks.length >= 200) { setError("This collection already has 200 decks."); return; } if (normalizeTerm(editingDeck.sourceLanguage) === normalizeTerm(editingDeck.targetLanguage)) { setError("Choose different source and learning languages."); return; } if (!editingDeck.name.trim() || !editingDeck.targetLanguage.trim() || !editingDeck.sourceLanguage.trim() || !editingDeck.level.trim()) return; const clean:Deck = { ...editingDeck, skills:editingSkills, dailyGoal:getLanguageGoal(data,editingDeck.targetLanguage), name: editingDeck.name.trim(), targetLanguage: editingDeck.targetLanguage.trim(), sourceLanguage: editingDeck.sourceLanguage.trim(), level: skillSummary(editingSkills) }; setData(previous => ({ ...previous, decks: newDeck ? [...previous.decks, clean] : previous.decks.map(d => d.id === clean.id ? clean : d), profile: { ...previous.profile, languages: [...new Set([...previous.profile.languages, clean.targetLanguage])].slice(0,100), learningPreferences: [...(previous.profile.learningPreferences || []).filter(row => normalizeTerm(row.language)!==normalizeTerm(clean.targetLanguage)),{language:clean.targetLanguage,skills:clean.skills,dailyGoal:clean.dailyGoal || 10,chineseScript:clean.chineseScript}] } })); setDeckId(clean.id); setEditingDeck(null); setNotice(newDeck ? "Deck created." : "Deck settings saved. New exercises will use your updated level and goal."); }
+  function exportBackup() { const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" })); const a = document.createElement("a"); a.href = url; a.download = "heron-backup.json"; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); setNotice("Backup exported, including decks and review history."); }
+  async function importBackup(event: ChangeEvent<HTMLInputElement>) { const epoch = identityEpoch.current; const file = event.target.files?.[0]; event.target.value = ""; if (!file || busy) return; setError(""); try { if (file.size > 20_000_000) throw new Error("Choose a backup smaller than 20 MB."); const parsed = parseData(JSON.parse(await file.text())); if (epoch !== identityEpoch.current) return; if (!parsed) throw new Error("This is not a supported backup. Your current data is unchanged."); if (!window.confirm(`Replace this collection with ${parsed.decks.length} decks and ${parsed.items.length} words from the backup?`)) return; replaceData(parsed); setCanPersist(true); setStorageProblem(""); setNotice("Backup restored."); } catch (cause) { setError(message(cause)); } }
+  const visibleItems = deckItems.filter(item => !!item.excluded === showArchived && `${item.sourceTerm} ${item.targetTerm} ${item.sense}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()));
+
+  return <div className="recall-app">
+    <header className="topbar"><button className="brand brand-button" onClick={() => navigate("practice")} disabled={!!busy}><span className="brand-mark" aria-hidden="true">h.</span><span>Heron</span></button><div className="header-right"><span className="local-label"><span className="status-dot"/>{canPersist ? "Saved on this device" : hydrated ? "Saving paused" : "Loading"}</span><div className="account-links">{authUser ? <button className="button quiet" onClick={() => openAccount()} disabled={!!busy}>Account</button> : <><button className="text-button" onClick={() => openAccount("login")} disabled={!!busy}>Sign in</button>{(!onboardingVisible || welcomeVisible) && <button className="button quiet" onClick={() => openAccount("register")} disabled={!!busy}>Register</button>}</>}</div></div></header>
+    <datalist id="languages">{LANGUAGES.map(language => <option value={language} key={language}/>)}</datalist>
+    <main className="main-shell">
+      {storageProblem && <div className="message warning" role="alert"><p>{storageProblem}</p><button className="text-button" onClick={() => { setCanPersist(true); setStorageProblem(""); }}>Save this session and replace the unreadable copy</button></div>}
+      {error && <div className="message error" role="alert">{error}</div>}{notice && <div className="message success" role="status">{notice}</div>}
+      {!hydrated ? <section className="card loading-card">Opening your learning space…</section> : welcomeVisible ? <section className="card welcome-card" aria-labelledby="welcome-heading"><span className="welcome-mark" aria-hidden="true">h.</span><h1 id="welcome-heading">Welcome to Heron</h1><p>A little language, every day.</p><div className="welcome-actions"><button className="button primary" onClick={beginPreferences}>Get started <span aria-hidden="true">→</span></button><button className="text-button" onClick={() => openAccount("login")}>Sign in</button></div></section> : onboardingVisible ? <Onboarding
+        draft={setup} busy={!!busy} hasDecks={data.decks.length > 0} canCancel={!needsOnboarding(data)} showAccount={showAccount}
+        onChange={draft => { setData(previous => ({ ...previous, onboardingDraft: draft })); setError(""); }}
+        onFinish={finishOnboarding} onCancel={cancelPreferences} onToggleAccount={() => openAccount("login")}/>
+        : <>
+        <div className="intro-row"><div><p className="eyebrow">A LITTLE PRACTICE, EVERY DAY</p><h1>{tab === "practice" ? "Make the words yours." : tab === "vocabulary" ? "Your growing vocabulary." : tab === "writing" ? "Remember the strokes." : tab === "settings" ? "Make it your own." : tab === "help" ? "A little guidance." : "Start with a word."}</h1></div><div className="daily-progress"><strong>{dailyDone}<span> / {dailyGoal}</span></strong><span>{goalLanguage} words today</span><progress value={Math.min(dailyDone, dailyGoal)} max={dailyGoal} aria-label="Daily vocabulary goal"/></div></div>
+        <nav className="tabs" aria-label="Main navigation">{([['practice','Practice'],['vocabulary','Vocabulary'],['add','+ Add word'],['writing','Writing'],['settings','Settings'],['help','Help']] as [Tab,string][]).map(([id,label]) => <button key={id} className={tab === id ? "active" : ""} aria-current={tab === id ? "page" : undefined} onClick={() => navigate(id)} disabled={!!busy}>{label}</button>)}</nav>
+        {!["settings", "help"].includes(tab) && <div className="deck-toolbar"><div className="deck-select"><label htmlFor="active-deck">YOUR DECK</label><select id="active-deck" value={deck?.id || ""} disabled={!!busy} onChange={e => switchDeck(e.target.value)}>{data.decks.length ? data.decks.map(d => <option key={d.id} value={d.id}>{d.name}</option>) : <option value="">No decks yet</option>}</select></div><div className="deck-status"><span>{dueItems.length} due</span><span>{available.length - dueItems.length} upcoming</span></div><button className="text-button" disabled={!!busy} onClick={() => { setNewDeck(true); setEditingDeck(freshDeck(data.profile.sourceLanguage, data.profile.languages[0] || "Spanish", data.profile.level, data.profile.goal)); }}>+ New deck</button></div>}
+        {tab === "practice" ? goalPaused ? <section className="card goal-card"><span className="celebration-mark" aria-hidden="true">✦</span><p className="eyebrow">TODAY’S GOAL, DONE</p><h2>You showed up. That’s how it sticks.</h2><p>You practiced {dailyDone} different {goalLanguage} words today. Take a well-earned pause, or keep going if you feel like it.</p><button className="button primary" onClick={keepPracticing}>I’d like to keep practicing</button><button className="text-button" onClick={() => navigate("vocabulary")}>Browse my vocabulary</button></section> : current && exercise ? <>
+          {extraId === current.id && current.dueAt > now && !completed && <div className="message warning">Extra practice · This word is not due yet. Its next scheduled review is {dateLabel(current.dueAt)}.</div>}
+          <section className="card practice-card" aria-label="Translation exercise"><div className="card-topline"><span className="language-label">{current.sourceLanguage} <span aria-hidden="true">→</span> {current.targetLanguage}</span><div className="badges"><span className="badge" title={deck?.level || current.level}>{deck?.skills ? "Your skill levels" : deck?.level || current.level}</span><span className="badge subtle">{exercise.origin === "sample" ? "Sample exercise" : "Your vocabulary"}</span></div></div><p className="exercise-direction">Translate the whole sentence into {current.targetLanguage}.</p><p className="source-sentence" dir="auto"><SentenceText text={exercise.sourceSentence} language={current.sourceLanguage} highlight={sourceHighlight(exercise,current.sourceTerm)} onWord={word => openSentenceWord(word,"source",exercise.sourceSentence,current.sourceLanguage)}/></p><p className="source-help">Try it from memory. Reveal only as much as you need.</p>
+          {(lengths || shell) && !completed && <div className="shell-area"><p className="tiny-label">{shell ? "ONE POSSIBLE SENTENCE SHELL" : "TAP A SURROUNDING WORD TO REVEAL IT"}</p><div className="word-shell">{displayChunks.map((chunk,index) => { const visible = locked || (!chunk.isTarget && (shell || revealed.includes(index))); if (chunk.isTarget) return <span className={`word-chip target-chip ${visible ? "visible" : ""}`} key={index} aria-label={visible ? undefined : "Target vocabulary, kept hidden"}>{visible ? chunk.text : maskText(chunk.text)}</span>; return <button className={`word-chip ${visible ? "visible" : ""}`} key={index} aria-label={visible ? chunk.text : `Reveal surrounding word ${index + 1}`} disabled={!!busy || visible} onClick={() => { setRevealed(previous => [...previous,index]); updateHints({ hintsUsed: hints.hintsUsed + 1 }); }}>{visible ? chunk.text : maskText(chunk.text)}</button>; })}</div><p className="field-note">The highlighted blank stays hidden until you reveal the answer.</p></div>}
+          <div className="answer-block"><label htmlFor="translation">Your translation</label><textarea ref={answerInput} id="translation" dir="auto" rows={3} value={answer} maxLength={2000} spellCheck={false} autoCorrect="off" autoComplete="off" autoCapitalize="off" placeholder={`Write your sentence in ${current.targetLanguage}…`} disabled={!!busy || locked} onChange={e => { setAnswer(e.target.value); updateHints({ answer:e.target.value }); }}/></div>
+          {!completed && <><div className="hint-controls"><button className="button quiet" onClick={() => { setLengths(true); updateHints({ lengthsShown:true }); }} disabled={!!busy || locked || lengths || shell}>Show word lengths</button><button className="button quiet" onClick={() => { setShell(true); setLengths(true); updateHints({ shellShown:true, lengthsShown:true }); }} disabled={!!busy || locked || shell}>Show sentence shell</button><button className="text-button" onClick={() => { setAnswerRevealed(true); updateHints({ targetRevealed:true }); }} disabled={!!busy || locked}>Reveal answer</button></div><div className="check-row"><button className="button primary" onClick={checkAnswer} disabled={!!busy || !answer.trim() || locked}>{busy === "grade" ? "Checking your translation…" : "Check with AI"}</button><p className="field-note">Optional feedback.<br/>You can also assess your own recall below.</p></div></>}
+          {locked && <div className="feedback-area" aria-live="polite">{grade && <><div className="feedback-tags"><span className={`feedback-tag ${grade.meaningCorrect ? "positive" : "neutral"}`}>{grade.meaningCorrect ? "Meaning conveyed" : "Check the meaning"}</span></div><p className="ai-feedback" lang="en">{grade.feedback}</p></>}{translationLines(exercise,current.targetLanguage)}{needsVariants && <p className="field-note" role="status">{variantStatus.id===exercise.id && variantStatus.state==="error" ? <>Both script versions could not load. <button className="text-button" onClick={() => setVariantStatus({id:"",state:"done"})}>Try again</button></> : "Preparing simplified and traditional versions…"}</p>}<p className="field-note">{answerRevealed ? "The target was revealed, so this attempt is recorded as Again." : "Other natural translations are welcome. Your rating sets the review schedule."}</p></div>}
+          </section><section className="rating-card" aria-label="Save your review">{completed ? <div className="completion-row"><div><h2>A little stronger than before.</h2><p className="field-note">Your attempt and hint use are recorded.</p></div><button className="button primary" onClick={nextWord}>Next due word <span aria-hidden="true">→</span></button></div> : <><div className="rating-heading"><div><h2>How well did you recall the target word?</h2><p className="field-note">Choose one rating to save this review.</p></div><span className="hint-summary">{hints.targetRevealed ? "Target revealed" : assisted ? "Assisted attempt" : "No hints used"}</span></div><div className="rating-buttons"><button className="rating-button" disabled={!!busy} onClick={() => rate("forgot")}><strong>Again</strong><span>I did not recall it</span></button><button className="rating-button" disabled={!!busy || !answer.trim() || hints.targetRevealed} onClick={() => rate("hard")}><strong>A little bit</strong><span>Effort or hints needed</span></button><button className="rating-button remembered" disabled={!!busy || !answer.trim() || assisted} onClick={() => rate("remembered")}><strong>Remembered</strong><span>Recalled without hints</span></button></div><p className="rating-note">{assisted ? "Remembered is unavailable after any hint, even if you switch to another context." : "Using a hint makes this an assisted review. Revealing the target means Again."}</p></>}</section>
+          <div className="practice-footer"><button className="button context-button" onClick={anotherContext} disabled={!!busy || (grade !== null && !completed)}>{busy === "context" ? "Preparing a new sentence…" : "Try another context"}<span aria-hidden="true">↻</span></button>{grade && !completed && <span className="field-note">Rate this checked answer before trying another context.</span>}<button className="text-button" onClick={() => { archive(current,true); setSelectedId(""); setExtraId(""); resetVisible(); }}>Exclude this word</button><span>{current.reviewCount} reviews · {completed ? "Next due" : "Scheduled"}: {current.dueAt <= now ? "now" : dateLabel(current.dueAt)}</span></div>
+        </> : <section className="card empty-state"><span className="empty-mark" aria-hidden="true">✦</span><h2>{available.length ? "You’re up to date." : "Your next words start here."}</h2><p>{available.length ? `${available.length} words are scheduled for later. Your earliest review is ${dateLabel(Math.min(...available.map(item => item.dueAt)))}.` : "Add words you encounter, or let AI choose a few for your goal."}</p><div className="empty-actions">{deck && <button className="button primary" onClick={addPersonalized} disabled={!!busy}>{busy === "personalize" ? "Choosing your words…" : "Choose 5 words for me"}</button>}<button className="button quiet" onClick={() => navigate("add")}>Add my own words</button>{available.length > 0 && <button className="text-button" onClick={() => navigate("vocabulary")}>Choose a word for extra practice</button>}</div></section> : tab === "vocabulary" ? <section className="card vocabulary-card"><div className="section-heading"><h2>A word, many contexts.</h2><p className="field-note">Archive words you do not want to practice. They will also be excluded from future suggestions.</p></div><div className="vocabulary-tools"><label className="visually-hidden" htmlFor="word-search">Search vocabulary</label><input id="word-search" type="search" placeholder="Search this deck…" value={search} onChange={e => setSearch(e.target.value)}/><label className="checkbox-label"><input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)}/>Archived</label></div><div className="vocabulary-list">{visibleItems.length ? visibleItems.map(item => <article className="vocabulary-row" key={item.id}><div className="vocabulary-copy"><h3>{item.sourceTerm} <span aria-hidden="true">→</span> <CharacterText text={item.targetTerm} onCharacter={setMnemonicCharacter}/></h3><p>{item.sense}</p><span className="vocabulary-meta">{item.exercises.length} contexts · {item.reviewCount} reviews · {item.dueAt <= now ? "Ready now" : `Due ${dateLabel(item.dueAt)}`}</span></div><div className="vocabulary-action">{!item.excluded && <button className="button quiet" onClick={() => { setSelectedId(item.id); setExtraId(item.dueAt > now ? item.id : ""); resetVisible(); setTab("practice"); setNotice(""); }}>{item.dueAt <= now ? "Practice" : "Extra practice"}</button>}<button className="text-button" onClick={() => archive(item,!item.excluded)}>{item.excluded ? "Restore word" : "Archive word"}</button></div></article>) : <p className="empty-search">{showArchived ? "No archived words match." : "No words match. Add a word to get started."}</p>}</div>{deck && <div className="list-actions"><button className="button context-button" onClick={addPersonalized} disabled={!!busy}>{busy === "personalize" ? "Choosing words…" : "Choose 5 more words for me"}</button></div>}</section> : tab === "add" ? <section className="card add-card"><div className="section-heading"><h2>What would you like to remember?</h2><p className="field-note">{deck ? `${deck.sourceLanguage} → ${deck.targetLanguage} · ${deck.level}` : "Create a deck first using the button above."}</p></div>{deck && <><form onSubmit={generateWord}><div className="form-grid"><div className="form-field"><label htmlFor="source-term">Word or phrase in {deck.sourceLanguage}</label><input id="source-term" required maxLength={160} value={wordForm.sourceTerm} disabled={!!busy} placeholder="e.g. shame" onChange={e => { setWordForm({ ...wordForm, sourceTerm:e.target.value }); setPreview(null); }}/></div><div className="form-field"><label htmlFor="target-term">In {deck.targetLanguage} <span className="optional">optional</span></label><input id="target-term" maxLength={160} value={wordForm.targetTerm} disabled={!!busy} onChange={e => { setWordForm({ ...wordForm, targetTerm:e.target.value }); setPreview(null); }}/></div></div><div className="form-field"><label htmlFor="word-sense">Which meaning? <span className="optional">optional</span></label><input id="word-sense" maxLength={600} value={wordForm.sense} disabled={!!busy} placeholder="e.g. feeling embarrassed about something you did" onChange={e => { setWordForm({ ...wordForm, sense:e.target.value }); setPreview(null); }}/></div><button className="button primary" type="submit" disabled={!!busy || !wordForm.sourceTerm.trim()}>{busy === "generate" ? "Creating your exercise…" : "Generate an exercise"}</button><p className="field-note generate-note">Confirm the proposed meaning before saving. AI quality varies by language.</p></form>{preview && <div className="preview-card" aria-live="polite"><p className="tiny-label">CONFIRM THE WORD AND ITS MEANING</p><h3>{preview.sourceTerm} → <CharacterText text={preview.targetTerm} onCharacter={setMnemonicCharacter}/></h3><p>{preview.sense}</p><div className="preview-example"><p><SentenceText text={preview.exercise.sourceSentence} language={deck.sourceLanguage} highlight={sourceHighlight(preview.exercise,preview.sourceTerm)} onWord={word => openSentenceWord(word,"source",preview.exercise.sourceSentence,deck.sourceLanguage)}/></p>{translationLines(preview.exercise,deck.targetLanguage)}</div><p className="field-note">A different sense? Edit the meaning above and generate again.</p><button className="button primary" onClick={saveWord} disabled={!!busy}>Save vocabulary & practice</button></div>}</>}</section> : tab === "writing" ? <WritingPractice data={data} setData={setData} deckId={deck?.id || ""} onCharacter={setMnemonicCharacter}/> : tab === "settings" ? <div className="settings-stack"><section className="card settings-card"><div className="section-heading"><h2>Your learning preferences.</h2><p className="field-note">Revisit your languages, goals, levels, and daily target. Your existing decks and review history stay with you.</p></div><button className="button context-button" onClick={openPreferences} disabled={!!busy}>Edit learning preferences</button></section><section className="card settings-card"><div className="section-heading"><h2>Your daily rhythm.</h2><p className="field-note">A goal should help you show up, without making practice a chore.</p></div><div className="language-goals">{Array.from(new Map(data.decks.map(row => [normalizeTerm(row.targetLanguage),row.targetLanguage])).values()).map(language => <div className="form-field language-daily-goal" key={language}><label htmlFor={`goal-${normalizeTerm(language)}`}>{language} words per day</label><input id={`goal-${normalizeTerm(language)}`} type="number" min={1} max={100} value={getLanguageGoal(data,language)} onChange={event => changeDailyGoal(language,Number(event.target.value))}/></div>)}</div><p className="field-note">Each language has its own goal. Repeated reviews of one word count once. Writing practice has a separate schedule.</p></section><section className="card settings-card"><div className="section-heading"><h2>Your decks.</h2><p className="field-note">Each deck has its own language, level, and learning goal.</p></div>{data.decks.map(d => <div className="deck-settings-row" key={d.id}><div><h3>{d.name}</h3><p className="field-note">{d.sourceLanguage} → {d.targetLanguage} · {d.level}</p><p className="field-note">{d.goal || "No specific goal yet"}</p></div><button className="button quiet" onClick={() => { setNewDeck(false); setEditingDeck({ ...d }); }}>Edit deck</button></div>)}<button className="button context-button" onClick={() => { setNewDeck(true); setEditingDeck(freshDeck(data.profile.sourceLanguage,data.profile.languages[0] || "Spanish",data.profile.level,data.profile.goal)); }}>Create a deck</button></section><section className="card settings-card"><h2>Your backup.</h2><p className="field-note">Export your decks, schedules, and history as a file. Importing replaces this collection after confirmation.</p><div className="backup-controls"><button className="button quiet" onClick={exportBackup}>Export backup</button><button className="button quiet" onClick={() => fileInput.current?.click()}>Import backup</button></div></section></div> : <section className="card help-card"><h2>Pick the part you need.</h2><p className="field-note">Open a topic below. Everything else stays out of your way.</p><details><summary>How do I set up or change my learning preferences?</summary><p>Your first visit starts with your languages, a goal and current level for each one, and a daily word target. Then choose personalized vocabulary or your own words. Unfinished answers are saved so you can continue after a refresh. Returning learners go straight to practice. Open Settings → Edit learning preferences to revisit the questions without deleting your decks or history.</p><p>After this update, earlier users confirm their preferences once, with existing choices filled in where available. An old demo deck does not count as completing setup.</p></details><details><summary>How does a practice session work?</summary><p>Translate the source sentence into your learning language. Start from memory, then use only the hints you need. AI gives a brief response in English about whether your translation conveys the meaning. It does not receive the sentence shell or reference translation. You can also assess yourself. A reference sentence is one valid translation; other wording can be correct.</p></details><details><summary>What do the three ratings mean?</summary><p><strong>Again:</strong> you did not recall the target, or you revealed it. <strong>A little bit:</strong> recall required effort or surrounding hints. <strong>Remembered:</strong> you recalled it without any hint. Word lengths, word reveals, and the shell all disable Remembered. Switching contexts does not reset this rule.</p><p>FSRS schedules the next review from your history and rating. Review times vary; they are not fixed to one, three, or seven days.</p></details><details><summary>How do personalized decks and exclusions work?</summary><p>Describe your level and goal in deck settings, then choose five words at a time. AI suggestions are provisional and can be imperfect. Archive unwanted words in Vocabulary to remove them from practice and future suggestions. Restore an archived word if you change your mind.</p></details><details><summary>Which languages and levels can I use?</summary><p>Type a language name instead of choosing from a fixed list. Choose your current speaking, writing, listening, and reading levels separately. Put exam targets in your goal: for example, C1 or C2 for Spanish, JLPT for Japanese, or HSK and TOCFL for Chinese. Generation quality varies by language and script, and an exam label is not a guarantee of official exam content.</p></details><details><summary>How does writing practice work?</summary><p>Writing reviews are separate from sentence translation. Use the Writing tab to practice eligible characters from your vocabulary, draw from memory, and assess the result. Draw from memory, reveal the reference, and rate your own recall. This version does not recognize handwriting or check stroke order. Tap a visible Chinese character or Japanese kanji to open its mnemonic tools.</p></details><details><summary>Character stories and memory images</summary><p>Tap a visible Chinese character or Japanese kanji to open mnemonic tools. Components are the pieces used to build a character; a dictionary radical is a particular indexing component, and the terms are not interchangeable. AI memory stories are invented learning aids, not verified historical etymology. Character stories are a premium preview; no checkout or payment is active.</p></details><details><summary>What counts toward my daily goal?</summary><p>Each language has its own daily word target. Each different vocabulary word reviewed in that language today counts once, even if you repeat it. Writing reviews do not inflate that goal. When you reach the goal, practice pauses with encouragement. You can stop for the day or explicitly continue.</p></details><details><summary>Where is my progress saved?</summary><p>Your browser keeps a local copy. With the account service configured, you can sign in and explicitly choose which copy to use before syncing. Signing out restores the guest collection. Export backups for an independent copy; clearing browser data can remove local progress.</p></details><details><summary>Why is AI unavailable or giving an error?</summary><p>The prepared demo works without AI. Generating custom exercises, choosing personalized words, and grading need an AI connection. For local setup, follow the included README to configure the server API key. Hosted AI requires configured account authentication and provider limits. Your pending answer stays here if a request fails.</p></details><details><summary>Can I use another sentence or practice early?</summary><p>Try another context changes the example while preserving vocabulary progress and hint history for the current review. Only due words appear in the normal queue. Vocabulary lets you explicitly choose extra practice for upcoming words, clearly labeled as early practice.</p></details></section>}
+      </>}
+      {hydrated && <div hidden={!showAccount} className="modal-backdrop account-overlay"><section className="modal account-modal" role={showAccount ? "dialog" : undefined} aria-modal={showAccount || undefined} aria-labelledby="account-heading"><div className="modal-heading"><h2 id="account-heading">{authUser ? "Your account" : "Your Heron account"}</h2><button className="text-button" onClick={() => setShowAccount(false)} aria-label="Close account">Close</button></div><AccountPanel data={data} onLoad={replaceData} onIdentityChange={changeIdentity} requestedMode={accountRequest} allowRegister={!onboardingVisible || welcomeVisible} onAuthChange={setAuthUser}/></section></div>}
+      {hydrated && !welcomeVisible && <footer className="page-footer"><p>Heron<span>A little language, every day.</span></p></footer>}<input ref={fileInput} className="visually-hidden" type="file" accept="application/json,.json" onChange={importBackup} tabIndex={-1} aria-label="Import vocabulary backup"/>
+    </main>
+    {showGoalModal && <div className="modal-backdrop"><section className="modal goal-modal" role="dialog" aria-modal="true" aria-labelledby="goal-heading"><span className="celebration-mark" aria-hidden="true">✦</span><p className="eyebrow">YOU DID IT</p><h2 id="goal-heading">Today’s goal is in the bag.</h2><p>{dailyDone} different {goalLanguage} words practiced. That’s a good day’s work—and a little more language you can reach for tomorrow.</p><div className="modal-actions"><button autoFocus className="button primary" onClick={() => setData(previous => ({ ...previous,languageGoalPausedDays:{...previous.languageGoalPausedDays,[goalLanguageKey]:today} }))}>Finish for today</button><button className="button quiet" onClick={keepPracticing}>Keep practicing</button></div></section></div>}
+    {editingDeck && <div className="modal-backdrop"><section className="modal deck-modal" role="dialog" aria-modal="true" aria-labelledby="deck-heading"><div className="modal-heading"><h2 id="deck-heading">{newDeck ? "Create a deck" : "Edit your deck"}</h2><button className="text-button" onClick={() => setEditingDeck(null)} aria-label="Close deck editor">Close</button></div><form onSubmit={saveDeck}><div className="form-field"><label htmlFor="deck-name">Deck name</label><input id="deck-name" autoFocus required maxLength={160} value={editingDeck.name} onChange={e => setEditingDeck({ ...editingDeck,name:e.target.value })}/></div><div className="form-grid"><div className="form-field"><label htmlFor="deck-source">Translate from</label><input id="deck-source" list="languages" required maxLength={60} disabled={!newDeck} value={editingDeck.sourceLanguage} onChange={e => setEditingDeck({ ...editingDeck,sourceLanguage:e.target.value })}/></div><div className="form-field"><label htmlFor="deck-language">Learning language</label><input id="deck-language" list="languages" required maxLength={60} disabled={!newDeck} value={editingDeck.targetLanguage} onChange={e => setEditingDeck({ ...editingDeck,targetLanguage:e.target.value })}/></div></div><fieldset className="form-field skill-level-field"><legend>Your current level in {editingDeck.targetLanguage}</legend><SkillLevelGrid value={editingSkills} idPrefix="deck-skills" onChange={setEditingSkills}/></fieldset>{isChineseLanguage(editingDeck.targetLanguage) && <div className="form-field"><label htmlFor="deck-script">Chinese characters</label><select id="deck-script" value={editingDeck.chineseScript || ""} required onChange={event => setEditingDeck({...editingDeck,chineseScript:event.target.value as ChineseScript})}><option value="" disabled>Choose characters</option><option value="simplified">Simplified</option><option value="traditional">Traditional</option><option value="both">Both</option></select></div>}<div className="form-field"><label htmlFor="deck-goal">Learning goal</label><textarea id="deck-goal" rows={2} maxLength={600} placeholder={goalExample(editingDeck.targetLanguage,editingDeck.chineseScript)} value={editingDeck.goal} onChange={e => setEditingDeck({ ...editingDeck,goal:e.target.value })}/></div><label className="checkbox-label"><input type="checkbox" checked={editingDeck.personalized} onChange={e => setEditingDeck({ ...editingDeck,personalized:e.target.checked })}/>Use personalized word suggestions</label><div className="modal-actions"><button className="button primary" type="submit">Save deck</button><button className="button quiet" type="button" onClick={() => setEditingDeck(null)}>Cancel</button>{!newDeck && <button className="text-button danger-text" type="button" onClick={() => { const id = editingDeck.id; setDeckId(id); if (!window.confirm(`Delete “${editingDeck.name}” and all its vocabulary and review history?`)) return; const ids = new Set(data.items.filter(item => item.deckId === id).map(item => item.id)); setData(previous => ({ ...previous,decks:previous.decks.filter(d => d.id !== id),items:previous.items.filter(item => item.deckId !== id),reviews:previous.reviews.filter(review => review.deckId !== id),writingCards:previous.writingCards.filter(card => !ids.has(card.itemId)),writingHintedCards:previous.writingHintedCards?.filter(cardId => previous.writingCards.some(card => card.id === cardId && !ids.has(card.itemId))),pendingAttempts:Object.fromEntries(Object.entries(previous.pendingAttempts || {}).filter(([itemId]) => !ids.has(itemId))) })); setEditingDeck(null); setSelectedId(""); setDeckId(data.decks.find(d => d.id !== id)?.id || ""); }}>Delete deck</button>}</div></form></section></div>}
+    {vocabularyCandidate && <VocabularyDialog candidate={vocabularyCandidate} decks={data.decks.filter(row => normalizeTerm(vocabularyCandidate.side === "source" ? row.sourceLanguage:row.targetLanguage)===normalizeTerm(vocabularyCandidate.language))} initialDeckId={deck?.id || ""} onClose={() => {if (!busy) setVocabularyCandidate(null);}} onAdd={captureVocabulary} onCharacter={character => {setVocabularyCandidate(null);setMnemonicCharacter(character);}}/>}
+    {mnemonicCharacter && <MnemonicDialog character={mnemonicCharacter} language={deck?.targetLanguage || ""} onClose={() => setMnemonicCharacter(null)}/>}
+  </div>;
 }
