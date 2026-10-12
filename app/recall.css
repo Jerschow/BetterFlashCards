@@ -51,6 +51,10 @@
         .button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; padding: 11px 17px; border: 1px solid transparent; border-radius: 8px; font-size: 13px !important; font-weight: 600 !important; transition: background .15s; line-height: 1.5; }
         .button.primary { background: #285f4e; color: white; border-color: #285f4e; }
         .button.primary:hover:not(:disabled) { background: #1d4d3e; }
+        .button.sign-in-button { min-height: 44px; min-width: 106px; padding: 10px 22px; border: 2px solid #214f40; background: #214f40; color: #fff; font-size: 15px; font-weight: 700; }
+        .button.sign-in-button:hover:not(:disabled) { background: #153b2e; border-color: #153b2e; }
+        .welcome-actions .sign-in-button { min-width: 150px; }
+        .ai-feedback { white-space: pre-line; line-height: 1.75; overflow-wrap: anywhere; }
         .button.quiet { border-color: #dfe5d9; background: #f5f7f0; color: #5f7463; padding: 8px 11px; font-size: 11px !important; }
         .button.quiet:hover:not(:disabled) { background: #e9efe2; }
         .text-button { background: none; border: 0; padding: 7px 2px; color: #627268; font-size: 11px !important; text-decoration: underline; text-underline-offset: 3px; }
@@ -306,8 +310,9 @@
 .welcome-mark { display:grid;place-items:center;width:72px;height:72px;border-radius:22px;background:#eaf0e6;color:#285f4e;font:52px Georgia,serif;padding-bottom:7px;margin:0 auto 30px; }
 .welcome-card h1 { font-size:clamp(32px,5vw,45px); }
 .welcome-card>p { color:#627268;font-size:15px;margin:15px 0 30px; }
-.welcome-actions { display:flex;flex-direction:column;align-items:center;gap:14px; }
+.welcome-actions { display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:28px; }
 .welcome-actions .primary { min-width:195px; }
+.welcome-actions .sign-in-button { min-width:195px; }
 .skill-level-field { border:0;padding:0;min-width:0; }
 .skill-level-field>legend { color:#475e50;font-weight:600;font-size:12px;margin-bottom:13px; }
 .skill-grid-wrap { max-width:100%;overflow-x:auto;border:1px solid #dfe5dc;border-radius:10px;background:#fffefa; }
