@@ -1,6 +1,7 @@
 "use client";
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { ensureGuestTrial, refreshGuestTrial } from "./guest-client";
 import { parseData, type AppData } from "./model";
 
 let client: SupabaseClient | null | undefined;
@@ -33,7 +34,11 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
   new Headers(init.headers).forEach((value, key) => headers.set(key, value));
   if (typeof init.body === "string" && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   for (const [key, value] of Object.entries(await apiHeaders())) headers.set(key, value);
-  return fetch(input, { ...init, headers });
+  const guest = !headers.has("Authorization");
+  const localDevelopment = process.env.NODE_ENV !== "production" && typeof window !== "undefined" && ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+  if (guest && !localDevelopment) await ensureGuestTrial();
+  try { return await fetch(input, { ...init, headers, credentials: "same-origin" }); }
+  finally { if (guest && !localDevelopment) void refreshGuestTrial().catch(() => undefined); }
 }
 
 export type CloudRecord = { snapshot: AppData | null; revision: number; updatedAt: string | null };

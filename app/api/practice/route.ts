@@ -1,7 +1,7 @@
 import { type Grade } from "../../../lib/recall";
 import { AppError, object, field, askAI, readBody, apiError } from "../../../lib/ai";
 import { generatedSchema, generationPreferences, generationRules, isChinese, readGeneratedWord } from "../../../lib/exercise-generation";
-import { authorizeAI } from "../../../lib/server-access";
+import { authorizeAI, authorizeGeneration } from "../../../lib/server-access";
 
 export const runtime = "nodejs";
 const gradeSchema = {
@@ -20,6 +20,7 @@ const highlightSchema = {
 };
 
 export async function POST(request: Request) {
+  let generation: Awaited<ReturnType<typeof authorizeGeneration>> | undefined;
   try {
     const data = await readBody(request);
     const sourceLanguage = field(data, "sourceLanguage", 60);
@@ -77,17 +78,19 @@ export async function POST(request: Request) {
       const goal = field(data, "goal", 600, true);
       const preferences = generationPreferences(data, targetLanguage);
       const avoidSentences = Array.isArray(data.avoidSentences) ? data.avoidSentences.filter((s): s is string => typeof s === "string" && s.length <= 2000).slice(-10) : [];
-      await authorizeAI(request);
+      generation = await authorizeGeneration(request, 1);
       const value = await askAI(
         `${generationRules}\nCreate one exercise for sourceTerm in the supplied sense. If targetTerm is nonempty it is fixed and must be preserved; otherwise propose ONE appropriate targetTerm and clearly explain its intended sense for learner confirmation. Avoid repeating avoidSentences.`,
         { sourceTerm, targetTerm, sense, sourceLanguage, targetLanguage, level, goal, ...preferences, avoidSentences }, generatedSchema, "vocabulary_exercise", 3000,
       );
       const word = readGeneratedWord(value, targetLanguage, targetTerm);
       if (avoidSentences.some(sentence => sentence.normalize("NFC").trim().toLowerCase() === word.exercise.sourceSentence.toLowerCase())) throw new AppError("The model repeated an earlier sentence. Please retry for a new context.", 502);
-      return Response.json({ targetTerm: word.targetTerm, sense: word.sense, exercise: word.exercise });
+      const guest = await generation.complete();
+      return Response.json({ targetTerm: word.targetTerm, sense: word.sense, exercise: word.exercise, ...(guest ? { guest } : {}) });
     }
     throw new AppError("Unknown practice action.");
   } catch (error) {
+    await generation?.cancel();
     return apiError(error);
   }
 }

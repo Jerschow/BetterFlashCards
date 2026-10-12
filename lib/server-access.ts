@@ -1,5 +1,6 @@
 // Server routes only. Never import this module from a client component.
 import { createClient } from "@supabase/supabase-js";
+import { authorizeGuest, reserveGuestGeneration, type GenerationAccess } from "./guest-server";
 
 export class AccessError extends Error {
   constructor(message: string, public status: number) { super(message); this.name = "AccessError"; }
@@ -36,14 +37,14 @@ function localQuota() {
   localUsage.dayCount += 1;
 }
 
-/** Local development can use guest AI; hosted AI requires a verified account and a durable quota. */
-export async function authorizeAI(request: Request, options: { premium?: boolean } = {}): Promise<void> {
+/** Hosted AI uses a verified account or a cookie-backed, database-limited guest trial. */
+export async function authorizeAI(request: Request, options: { premium?: boolean } = {}): Promise<"local" | "account" | "guest"> {
   if (localRequest(request)) {
     if (options.premium && process.env.ENABLE_MNEMONIC_PREVIEW !== "true") {
       throw new AccessError("Character stories are a premium preview. The site owner can enable the local preview in the environment settings.", 403);
     }
     localQuota();
-    return;
+    return "local";
   }
   const origin = request.headers.get("origin");
   const configuredOrigin = process.env.APP_ORIGIN;
@@ -54,7 +55,12 @@ export async function authorizeAI(request: Request, options: { premium?: boolean
   if (origin && origin !== allowedOrigin) throw new AccessError("Requests must come from this website.", 403);
   const header = request.headers.get("authorization") ?? "";
   const token = /^Bearer ([^\s]+)$/i.exec(header)?.[1];
-  if (!token || token.length > 8192) throw new AccessError("Please sign in to use AI practice on this website.", 401);
+  if (!header) {
+    if (options.premium) throw new AccessError("Please sign in to use character stories.", 401);
+    await authorizeGuest(request);
+    return "guest";
+  }
+  if (!token || token.length > 8192) throw new AccessError("Please sign in again to use AI practice.", 401);
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   if (!url || !key) throw new AccessError("Account storage is not configured yet.", 503);
@@ -63,7 +69,7 @@ export async function authorizeAI(request: Request, options: { premium?: boolean
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
   });
   const { data, error } = await cloud.auth.getUser(token);
-  if (error || !data.user) throw new AccessError("Your sign-in has expired. Please sign in again.", 401);
+  if (error || !data.user || data.user.is_anonymous) throw new AccessError("Your sign-in has expired. Please sign in again.", 401);
   if (options.premium) {
     const { data: entitlement, error: entitlementError } = await cloud.from("user_entitlements")
       .select("feature, expires_at").eq("user_id", data.user.id).eq("feature", "mnemonics").maybeSingle();
@@ -75,4 +81,13 @@ export async function authorizeAI(request: Request, options: { premium?: boolean
   const { error: quotaError } = await cloud.rpc("claim_ai_request");
   if (quotaError?.message.includes("AI_QUOTA_EXCEEDED")) throw new AccessError("You have reached your AI request limit. Please try again later.", 429);
   if (quotaError) throw new AccessError("Your AI allowance could not be checked. Please try again later.", 503);
+  return "account";
+}
+
+/** Reserve cards separately from the ordinary request rate limit. */
+export async function authorizeGeneration(request: Request, count: number): Promise<GenerationAccess> {
+  if (!Number.isInteger(count) || count < 1 || count > 10) throw new AccessError("Choose between 1 and 10 cards.", 400);
+  const identity = await authorizeAI(request);
+  if (identity === "guest") return reserveGuestGeneration(request, count);
+  return { count, complete: async () => null, cancel: async () => {} };
 }
